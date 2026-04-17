@@ -1,1 +1,209 @@
-# v-stats
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>V-Stats Pro v9.6 | Realtime Full Sync</title>
+    <style>
+        :root {
+            --court-green: #1b5e20; --card-bg: #1e1e1e; --text: #fff;
+            --gold: #d4af37; --green: #4caf50; --orange: #ff9800; --red: #f44336; --blue: #2196f3;
+            --neon-blue: #00e5ff;
+        }
+        body { font-family: sans-serif; background: #121212; color: var(--text); margin: 0; padding: 0; overflow: hidden; height: 100vh; }
+        .main-container { display: flex; height: 100vh; padding: 4px; gap: 4px; box-sizing: border-box; }
+        
+        /* スマホ横画面対応：カードが絶対に潰れないグリッド設定 */
+        .court-section { 
+            flex: 8; background: var(--court-green); border-radius: 4px; border: 2px solid #fff; 
+            display: grid; grid-template-columns: repeat(3, 1fr); 
+            grid-template-rows: repeat(2, minmax(260px, 1fr));
+            gap: 4px; padding: 4px; box-sizing: border-box; overflow-y: auto; 
+        }
+        
+        .control-section { flex: 2; display: flex; flex-direction: column; gap: 4px; min-width: 160px; height: 100%; overflow: hidden; }
+        .action-panel { flex: 1; display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
+        
+        #bench-list { display: none; background: #222; border: 1px solid #444; max-height: 200px; overflow-y: auto; border-radius: 4px; }
+        .bench-item { padding: 10px; border-bottom: 1px solid #333; font-size: 13px; font-weight: bold; cursor: pointer; text-align: center; }
+        .score-box { background: #000; border: 1px solid #555; border-radius: 6px; padding: 4px; text-align: center; }
+        .score-display { font-size: 32px; font-weight: bold; color: var(--gold); line-height: 1.2; }
+        .score-ctrl { display: flex; justify-content: space-around; gap: 2px; }
+        .small-btn { flex: 1; height: 35px; background: #444; border: none; color: #fff; border-radius: 4px; font-size: 14px; cursor: pointer; }
+        .rot-info { background: #0d47a1; border-radius: 4px; padding: 6px; text-align: center; font-weight: bold; font-size: 18px; color: var(--neon-blue); }
+        #live-analysis { flex: 1; background: #000; border-top: 2px solid var(--blue); font-size: 10px; padding: 6px; color: var(--neon-blue); overflow-y: auto; }
+
+        /* 選手カード */
+        .player-card { background: var(--card-bg); border-radius: 4px; padding: 4px 6px; display: flex; flex-direction: column; justify-content: space-between; border: 2px solid transparent; box-sizing: border-box; }
+        .player-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #444; padding-bottom: 2px; }
+        .player-header input { background: transparent; border: none; color: #fff; font-size: 12px; font-weight: bold; width: 35%; padding: 0; }
+        .selected-swap { border-color: var(--neon-blue) !important; background: #0d47a1 !important; box-shadow: inset 0 0 10px var(--blue); }
+
+        .stat-item { flex: 1; display: flex; flex-direction: column; justify-content: space-evenly; border-bottom: 1px solid #333; padding: 2px 0; min-height: 42px; }
+        .stat-label { font-size: 10px; color: var(--gold); font-weight: bold; }
+        .btn-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; }
+        .btn { border: none; border-radius: 2px; color: #fff; font-size: 11px; padding: 4px 0; font-weight: bold; cursor: pointer; }
+        .num-row { display: flex; justify-content: space-around; font-size: 13px; font-weight: 900; color: var(--neon-blue); text-shadow: 0 0 3px var(--blue); }
+        .rate-txt { font-size: 10px; color: #aaa; }
+        
+        #sync-status { text-align: center; font-size: 10px; color: #888; margin-top: 2px; }
+        .online { color: var(--green) !important; font-weight: bold; }
+
+        @media screen and (max-width: 600px) { .court-section { grid-template-columns: 1fr; grid-template-rows: auto; } }
+    </style>
+</head>
+<body>
+
+<div class="main-container">
+    <div class="court-section" id="court"></div>
+    <div class="control-section">
+        <div class="action-panel">
+            <button style="background:var(--blue); height:40px; color:white; border:none; border-radius:4px; font-weight:bold; cursor:pointer;" onclick="toggleBench()">控え・交代 ▼</button>
+            <div id="bench-list"></div>
+            <div class="score-box">
+                <div class="score-display"><span id="score-us">0</span>-<span id="score-them">0</span></div>
+                <div class="score-ctrl">
+                    <button class="small-btn" onclick="modifyScore('us', 1)">自+</button>
+                    <button class="small-btn" onclick="modifyScore('them', 1)">相+</button>
+                </div>
+            </div>
+            <div class="rot-info">S<span id="current-rot">1</span></div>
+            <div id="live-analysis"></div>
+            <div style="display: flex; gap: 4px;">
+                <button class="small-btn" onclick="undo()">戻る</button>
+                <button class="small-btn" style="background:var(--red);" onclick="finishGame()">消去</button>
+            </div>
+            <div id="sync-status">● 準備中...</div>
+        </div>
+    </div>
+</div>
+
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getDatabase, ref, set, onValue } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+    // あなたのFirebase設定
+    const firebaseConfig = {
+        apiKey: "AIzaSyDBnheYoLhMRg3VTAEj8BfDLLOOt4ImRkk",
+        authDomain: "v-status-860d4.firebaseapp.com",
+        databaseURL: "https://v-status-860d4-default-rtdb.asia-southeast1.firebasedatabase.app",
+        projectId: "v-status-860d4",
+        storageBucket: "v-status-860d4.firebasestorage.app",
+        messagingSenderId: "583329376307",
+        appId: "1:583329376307:web:c288fc9b312655633a1b46",
+        measurementId: "G-GBVG4B1MQY"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+    const gameRef = ref(db, 'vstats/live_game');
+
+    const defaultData = {
+        players: Array.from({length: 15}, (_, i) => ({ id: i, no: i+1, name: `選手${i+1}`, spike:{ex:0,ok:0,bad:0,miss:0}, serve:{ex:0,ok:0,bad:0,miss:0}, rec:{a:0,b:0,c:0,miss:0}, dig:{ex:0,ok:0,bad:0,miss:0}, block:{ex:0,ok:0,bad:0,miss:0} })),
+        courtIds: [0,1,2,3,4,5], score: {us:0, them:0}, currentRot: 1, serveRights: 'us', rotStats: Array.from({length: 7}, () => ({plus:0, minus:0}))
+    };
+
+    let players, courtIds, score, currentRot, serveRights, rotStats, history = [], swapSourceId = null;
+
+    // クラウドからのデータ受信（リアルタイム）
+    onValue(gameRef, (snapshot) => {
+        const data = snapshot.val() || defaultData;
+        players = data.players; courtIds = data.courtIds; score = data.score;
+        currentRot = data.currentRot; serveRights = data.serveRights; rotStats = data.rotStats;
+        
+        document.getElementById('sync-status').innerText = '● リアルタイム同期中';
+        document.getElementById('sync-status').className = 'online';
+        render(); updateAnalysis();
+    });
+
+    // クラウドへのデータ送信
+    function save() {
+        set(gameRef, { players, courtIds, score, currentRot, serveRights, rotStats });
+    }
+
+    // 画面の描画
+    function render() {
+        if(!players) return;
+        const court = document.getElementById('court'); court.innerHTML = '';
+        [3, 2, 1, 4, 5, 0].forEach(idx => {
+            const p = players[courtIds[idx]];
+            const card = document.createElement('div');
+            card.className = `player-card ${swapSourceId === p.id ? 'selected-swap' : ''}`;
+            card.innerHTML = `
+                <div class="player-header">
+                    <input type="text" value="${p.no}" id="no-${p.id}">
+                    <input type="text" value="${p.name}" id="name-${p.id}">
+                    <span style="cursor:pointer;font-size:11px;color:var(--neon-blue);font-weight:bold;" onclick="handleSwap(${p.id})">🔄交代</span>
+                </div>
+                ${createRow(p.id, 'SPIKE', 'spike', ['◎','○','△','×'])}
+                ${createRow(p.id, 'REC', 'rec', ['A','B','C','×'])}
+                ${createRow(p.id, 'SERVE', 'serve', ['◎','○','△','×'])}
+                ${createRow(p.id, 'BLOCK', 'block', ['◎','○','△','×'])}
+                ${createRow(p.id, 'DIG', 'dig', ['◎','○','△','×'])}
+            `;
+            court.appendChild(card);
+            
+            // 名前・背番号変更イベント
+            document.getElementById(`no-${p.id}`).addEventListener('change', (e) => { players[p.id].no = e.target.value; save(); });
+            document.getElementById(`name-${p.id}`).addEventListener('change', (e) => { players[p.id].name = e.target.value; save(); });
+        });
+
+        const blist = document.getElementById('bench-list'); blist.innerHTML = '';
+        players.forEach(p => { if(!courtIds.includes(p.id)) { const item = document.createElement('div'); item.className = 'bench-item'; item.innerText = `#${p.no} ${p.name}`; item.onclick = () => window.handleSwap(p.id); blist.appendChild(item); } });
+        document.getElementById('score-us').innerText = score.us; document.getElementById('score-them').innerText = score.them; document.getElementById('current-rot').innerText = currentRot;
+    }
+
+    function createRow(pid, label, cat, btns) {
+        const s = players[pid][cat];
+        const counts = (cat==='rec') ? [s.a, s.b, s.c, s.miss] : [s.ex, s.ok, s.bad, s.miss];
+        return `<div class="stat-item"><div style="display:flex;justify-content:space-between"><span class="stat-label">${label}</span><span style="font-size:10px;color:#aaa">${cat==='rec'?getRecRate(s):getEff(s)}%</span></div><div class="btn-grid">${btns.map((b,i)=>`<button class="btn" style="background:${['var(--gold)','var(--green)','var(--orange)','var(--red)'][i]}" onclick="record(${pid},'${cat}','${['ex','ok','bad','miss'][i]}')">${b}</button>`).join('')}</div><div class="num-row">${counts.map(c=>`<span>${c}</span>`).join('')}</div></div>`;
+    }
+
+    // HTMLから呼べるようにwindowオブジェクトに登録
+    window.record = (pid, cat, type) => {
+        const key = (cat==='rec' && type==='ex') ? 'a' : (cat==='rec' && type==='ok') ? 'b' : (cat==='rec' && type==='bad') ? 'c' : type;
+        players[pid][cat][key]++; history.push({type:'stat', pid, cat, key}); save();
+    };
+
+    window.modifyScore = (side, val) => {
+        let rotated = false; let pRights = serveRights;
+        if(side==='us' && val>0 && serveRights==='them') { courtIds=[courtIds[1],courtIds[2],courtIds[3],courtIds[4],courtIds[5],courtIds[0]]; currentRot=currentRot===6?1:currentRot+1; serveRights='us'; rotated=true; }
+        else if(side==='them' && val>0) serveRights='them';
+        score[side]+=val; if(val>0) { if(side==='us') rotStats[currentRot].plus++; else rotStats[currentRot].minus++; }
+        history.push({type:'score', side, val, rotated, pRights}); save();
+    };
+
+    window.handleSwap = (id) => {
+        if(swapSourceId === null) { swapSourceId = id; if(!courtIds.includes(id)) window.toggleBench(); render(); } 
+        else { const idxS = courtIds.indexOf(swapSourceId), idxT = courtIds.indexOf(id); if(idxS!==-1 && idxT!==-1) [courtIds[idxS], courtIds[idxT]] = [courtIds[idxT], courtIds[idxS]]; else if(idxS!==-1) courtIds[idxS]=id; else if(idxT!==-1) courtIds[idxT]=swapSourceId; swapSourceId=null; document.getElementById('bench-list').style.display='none'; save(); }
+    };
+
+    window.undo = () => {
+        if(!history.length) return;
+        const last = history.pop();
+        if(last.type==='stat') players[last.pid][last.cat][last.key]--;
+        else {
+            score[last.side]-=last.val;
+            if(last.val > 0) { if(last.side==='us') rotStats[currentRot].plus--; else rotStats[currentRot].minus--; }
+            if(last.rotated) { courtIds=[courtIds[5],courtIds[0],courtIds[1],courtIds[2],courtIds[3],courtIds[4]]; currentRot=currentRot===1?6:currentRot-1; }
+            serveRights = last.pRights;
+        }
+        save();
+    };
+
+    window.finishGame = () => { if(confirm("初期化しますか？")) { set(gameRef, defaultData); } };
+    window.toggleBench = () => { const l = document.getElementById('bench-list'); l.style.display = l.style.display==='block'?'none':'block'; };
+    
+    const updateAnalysis = () => {
+        const ana = document.getElementById('live-analysis');
+        if (!rotStats || rotStats.length < 7) return;
+        const sortedRot = [...rotStats].map((s,i)=>({i, d:s.plus-s.minus})).slice(1).sort((a,b)=>b.d-a.d);
+        const bestSpiker = [...players].sort((a,b)=> (b.spike.ex - b.spike.miss) - (a.spike.ex - a.spike.miss))[0];
+        ana.innerHTML = `<b>【分析】</b><br>最高R: S${sortedRot[0].i} (+${sortedRot[0].d})<br>最弱R: S${sortedRot[5].i} (${sortedRot[5].d})<br>得点王: #${bestSpiker.no} ${bestSpiker.name}`;
+    };
+
+    const getEff = (s) => { const t = s.ex+s.ok+s.bad+s.miss; return t>0?((s.ex-s.miss)/t*100).toFixed(0):0; };
+    const getRecRate = (r) => { const t = r.a+r.b+r.c+r.miss; return t>0?((r.a*100+r.b*50)/t).toFixed(0):0; };
+</script>
+</body>
+</html>
